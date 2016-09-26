@@ -1,59 +1,84 @@
 (ns mandelbrot.core
   (:gen-class)
   (:require [mikera.image.core :as i]
-            [mikera.image.colours :as colour])
-  (:import [javax.swing JFrame]))
+            [mikera.image.colours :as colour]
+            [mandelbrot.render :refer [create-buffer draw]])
+  (:import [javax.swing JFrame JOptionPane JPanel]
+           [java.awt.event KeyListener KeyEvent]
+           [java.awt Dimension]))
 
-(set! *warn-on-reflection* true)
+;; JFrame code borrowed from here: http://java.ociweb.com/mark/programming/ClojureSnake.html
 
-(defn complex-square [[a b]]
-  [(- (* a a) (* b b)) (* 2 a b)])
+; (set! *warn-on-reflection* true)
 
-;(defn complex-add-constant [[a b] c]
-;  [(+ a c) b])
 
-(defn complex-add [[a b] [c d]]
-  [(+ a c) (+ b d)])
+(defn render-frame [{:keys [image ^java.awt.Panel panel]}]
+  (.drawImage ^java.awt.Graphics2D (.getGraphics panel) image 
+              ^java.awt.geom.AffineTransform(java.awt.geom.AffineTransform. 1.0 0.0
+                                                                            0.0 1.0
+                                                                            0.0 0.0) nil))
 
-(defn complex-norm [[a b]]
-  (Math/sqrt (+ (* a a) (* b b))))
+(defn step [{:keys [:zoom :center] :as state} key-state*]
+  ;; handle key-presses
+  (let [{:keys [:key-code :shift] :as key-state} @key-state*
+        [center-x center-y] center
+        new-state (condp = key-code
+                    KeyEvent/VK_LEFT (assoc state :center [(- center-x 0.25) center-y])
+                    KeyEvent/VK_RIGHT (assoc state :center [(+ center-x 0.25) center-y])
+                    KeyEvent/VK_UP (assoc state :center [center-x (inc center-y)])
+                    KeyEvent/VK_DOWN (assoc state :center [center-x (dec center-y)])
+                    KeyEvent/VK_Z (assoc state :zoom (if shift (inc zoom) (dec zoom)))
+                    nil)]
+    (compare-and-set! key-state* key-state (assoc key-state :key-code nil))
+    (if new-state
+      (do
+        (draw new-state)
+        new-state)
+      state)))
 
-(defn view->complex-coords [[x y] [w h] zoom]
-  [(* (- (/ (* 2.0 x) w) 1.0) zoom)
-   (* (- (/ (* 2.0 y) h) 1.0) zoom)])
+(defn create-panel [width height key-state*]
+  (proxy [JPanel KeyListener]
+    [] ; superclass constructor arguments
+    (getPreferredSize [] (Dimension. width height))
+    (keyPressed [e]
+      (let [key-code (.getKeyCode e)]
+        (condp = key-code
+          KeyEvent/VK_SHIFT (swap! key-state* assoc :shift true)
+        (compare-and-set! key-state* @key-state* (assoc @key-state* :key-code key-code)))))
+    (keyReleased [e]
+      (let [key-code (.getKeyCode e)]
+        (condp = key-code
+          KeyEvent/VK_SHIFT (swap! key-state* assoc :shift false)
+          nil ; do nothing on release of other keys
+          )))
+    (keyTyped [e]) ; do nothing
+  ))
 
-(defn f [z c]
-  (let [max-iterations 20]
-  (loop [ab z
-         iterations 0]
-    (if (> iterations max-iterations)
-      ab
-      (recur (complex-add (complex-square ab) c) (inc iterations))))))
+(defn configure-gui [frame panel]
+  (doto panel
+    (.setFocusable true) ; won't generate key events without this
+    (.addKeyListener panel))
+  (doto frame
+    (.add panel)
+    (.pack)
+;    (.setDefaultCloseOperation JFrame/EXIT_ON_CLOSE)
+    (.setVisible true)))
 
-(defn value->color [ab]
-  (colour/rgb-from-components (mod (long (min (complex-norm ab) (Long/MAX_VALUE))) 255) 0 0))
-
-(defn draw-mandelbrot
-  [image]
-  (let [zoom 2.0
-        w (i/width image)
-        h (i/height image)]
-    (doseq [x (range w)
-            y (range h)]
-      (->> (f [0.0 0.0] (view->complex-coords [x y] [w h] zoom))
-           (value->color)
-           (i/set-pixel image x y)))
-    image))
-
-(defn -main
-  [& args]
+(defn -main [& args]
   (let [w 800
         h 800
-        ^java.awt.BufferedImage image (i/new-image w h)
-        ^javax.swing.JFrame f (doto (JFrame.)
-            (.setSize w h)
-            (.setVisible true))]
-    (draw-mandelbrot image)
-    (.drawImage ^java.awt.Graphics2D (.getGraphics f) image ^java.awt.geom.AffineTransform(java.awt.geom.AffineTransform. 1.0 0.0
-                                                                       0.0 1.0
-                                                                       0.0 0.0) nil)))
+        frame (JFrame. "Mandelbrot")
+        key-state* (atom {:key-code nil
+                          :shift false})
+        panel (create-panel w h key-state*)
+        image (create-buffer w h)
+        state {:image image
+               :panel panel
+               :zoom 2.0
+               :center [0.0 0.0]}]
+    (configure-gui frame panel)
+    (draw state)
+    (loop [state state]
+      (render-frame state)
+      (Thread/sleep 200)
+      (recur (step state key-state*)))))
