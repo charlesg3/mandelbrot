@@ -4,7 +4,7 @@
             [mikera.image.colours :as colour]
             [mandelbrot.render :refer [create-buffer draw]])
   (:import [javax.swing JFrame JOptionPane JPanel]
-           [java.awt.event KeyListener KeyEvent]
+           [java.awt.event KeyListener MouseListener KeyEvent MouseEvent]
            [java.awt Dimension]))
 
 ;; JFrame code borrowed from here: http://java.ociweb.com/mark/programming/ClojureSnake.html
@@ -22,13 +22,15 @@
   ;; handle key-presses
   (let [{:keys [:key-code :shift] :as key-state} @key-state*
         [center-x center-y] center
+        pan-speed 0.125
         new-state (condp = key-code
-                    KeyEvent/VK_LEFT (assoc state :center [(- center-x 0.25) center-y])
-                    KeyEvent/VK_RIGHT (assoc state :center [(+ center-x 0.25) center-y])
-                    KeyEvent/VK_UP (assoc state :center [center-x (inc center-y)])
-                    KeyEvent/VK_DOWN (assoc state :center [center-x (dec center-y)])
-                    KeyEvent/VK_Z (assoc state :zoom (if shift (inc zoom) (dec zoom)))
+                    KeyEvent/VK_LEFT (assoc state :center [(- center-x (* pan-speed zoom)) center-y])
+                    KeyEvent/VK_RIGHT (assoc state :center [(+ center-x (* pan-speed zoom)) center-y])
+                    KeyEvent/VK_UP (assoc state :center [center-x (+ center-y (* pan-speed zoom))])
+                    KeyEvent/VK_DOWN (assoc state :center [center-x (- center-y (* pan-speed zoom))])
+                    KeyEvent/VK_Z (assoc state :zoom (if shift (* zoom 1.1) (* zoom 0.9)))
                     nil)]
+    (println (select-keys new-state [:zoom :center]))
     (compare-and-set! key-state* key-state (assoc key-state :key-code nil))
     (if new-state
       (do
@@ -37,9 +39,18 @@
       state)))
 
 (defn create-panel [width height key-state*]
-  (proxy [JPanel KeyListener]
+  (proxy [JPanel KeyListener MouseListener]
     [] ; superclass constructor arguments
     (getPreferredSize [] (Dimension. width height))
+    (mouseClicked [e]
+      (let [point (.getPoint e)
+            x (.getX point)
+            y (.getY point)]
+      (println "clicked" (.getX point) (.getY point))))
+    (mouseEntered [e])
+    (mouseExited [e])
+    (mousePressed [e])
+    (mouseReleased [e])
     (keyPressed [e]
       (let [key-code (.getKeyCode e)]
         (condp = key-code
@@ -57,7 +68,8 @@
 (defn configure-gui [frame panel]
   (doto panel
     (.setFocusable true) ; won't generate key events without this
-    (.addKeyListener panel))
+    (.addKeyListener panel)
+    (.addMouseListener panel))
   (doto frame
     (.add panel)
     (.pack)
@@ -73,6 +85,8 @@
         panel (create-panel w h key-state*)
         image (create-buffer w h)
         state {:image image
+               :width w
+               :height h
                :panel panel
                :zoom 2.0
                :center [0.0 0.0]}]
